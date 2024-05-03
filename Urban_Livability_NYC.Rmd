@@ -1,0 +1,769 @@
+---
+title: "Masterfile"
+output: html_document
+date: "2024-04-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Dataset and Pre-processing
+## 1.1 the Noise Dataset
+Data Source: https://data.cityofnewyork.us/Social-Services/311-Noise-Complaints/p5f6-bkga/about_data
+
+```{r load and skim}
+raw_noise =read.csv("/Users/tianlanmac16/Desktop/Columbia AA/5205-R/StatSquad/NOISE/RAWNOISE_311_Noise_Complaints_20240222.csv")
+library(dplyr)
+library(skimr)
+skim(raw_noise)
+```
+### 1.1.1 Cleanning
+To get summarized and quantitative data from the raw noise data set, we will extract key info columns to analyze and aggregate including:
+
+Unique.Key: unique identifier of each complaint
+Incident.Zip: zipcode to locate
+Community.Board: a match to precint to locate
+Borough: borough names
+Created.Date: Exact date of occurrence for the reported event
+Complaint.Type:Residential/Commercial..etc type of complaints
+Descriptor: detail description on noise category
+Latitude
+Longitude
+```{r extect key columns}
+noise_subset = raw_noise %>%
+  select(Unique.Key, Created.Date, Community.Board, Borough, Incident.Zip, Incident.Address, Complaint.Type, Descriptor, Latitude, Longitude)
+```
+
+```{r format time}
+library(lubridate)
+noise_subset$Created.Date = mdy_hms(noise_subset$Created.Date)
+```
+
+```{r extract year between 2012-2022}
+filtered_noise_subset <- noise_subset %>%
+  filter(year(Created.Date) >= 2012 & year(Created.Date) <= 2022)
+```
+
+```{r impute 58 out of 5309712 data with Unspecified}
+library(dplyr)
+library(stringr)
+
+imputed_noise <- filtered_noise_subset %>%
+    mutate(Borough = str_replace(Borough, "^$", "Unspecified"),
+           Community.Board = str_replace(Community.Board, "^$", "0 Unspecified"))
+```
+
+```{r skim}
+skim(imputed_noise)
+unique(imputed_noise$Borough)
+unique(imputed_noise$Community.Board)
+```
+
+Due to limited time and computing power, instead of cleaning unspecified areas and zipcode, we will delete the data with missing values, with an approximate of 0.5% of our raw data to proceed.
+
+```{r reduce missing data}
+cleaned_noise = imputed_noise %>%
+  filter(!(str_detect(Community.Board, "^0 Unspecified"))) %>%
+  filter(!(str_detect(Community.Board, "^Unspecified"))) %>% 
+  filter(!(str_detect(Descriptor, "^\\s*$"))) 
+
+cleaned_noise = cleaned_noise[!is.na(cleaned_noise$Incident.Zip), ]
+nrow(cleaned_noise)
+```
+
+After reduction, we will keep 99.43% of our raw data in the Noise dataset for quantitative summary.
+```{r calculation}
+sprintf("%.10f", 5279309/5309712) # we kept 99.43% of the raw data 
+```
+
+```{r zip code into string}
+cleaned_noise$Incident.Zip <- as.character(cleaned_noise$Incident.Zip)
+```
+
+```{r adjust wrong community board}
+cleaned_noise_final <- cleaned_noise %>%
+  mutate(Borough = ifelse(Borough == 'MANHATTAN' & Community.Board == '08 BRONX', 'BRONX', Borough)) %>%
+  mutate(Borough = ifelse(Borough == 'BRONX' & Community.Board == '01 QUEENS', 'QUEENS', Borough)) 
+
+cleaned_noise_final %>%
+  filter(Borough == 'MANHATTAN')%>%
+  group_by(Community.Board) %>%
+  summarise(complaints = n()) 
+```
+
+### 1.1.2 Summary
+```{r summary and arrange}
+noise_summary<- cleaned_noise_final%>%
+  mutate(year = year(Created.Date), 
+         month = month(Created.Date)) %>% 
+  group_by(Borough, Community.Board, Incident.Zip, Complaint.Type, Descriptor, year, month) %>%
+  summarise(complaints = n()) 
+
+noise_summary <- noise_summary %>%
+  arrange(Incident.Zip, year, month, Complaint.Type, Descriptor)
+```
+
+```{r write clean csv}
+write.csv(noise_summary, 'noise_summary.csv',row.names = F)
+write.csv(cleaned_noise_final, 'cleaned_noise_final.csv',row.names = F)
+```
+
+The noise summary can be manipulated into many other forms based on the attributes being examined, for example, noise_complaint numbers by borough over time
+```{r other summary}
+noise_borough_performance = noise_summary %>%
+  group_by(Borough,  Complaint.Type,  year, month) %>%
+  summarise(complaints = n()) 
+
+noise_borough_performance <- noise_borough_performance %>%
+  arrange(Borough, year, month, Complaint.Type)
+noise_borough_performance
+```
+
+## 1.2 the Crime Dataset
+Data Source: https://data.cityofnewyork.us/Public-Safety/NYPD-Complaint-Data-Current-Year-To-Date-/5uac-w243/about_data
+
+### 1.2.1 Cleanning
+
+```{r load crime}
+library(dplyr)
+library(skimr)
+raw_crime=read.csv("//Users/tianlanmac16/Desktop/Columbia AA/5205-R/StatSquad/RECLEAN/RAW_NYPD_Complaint_Data 2012-2022.csv")
+skim(raw_crime)
+```
+
+To get summarized and quntitative data from the raw crime dataset, we will extract key info columns to analyze and aggregate including:
+CMPLNT_NUM: unique identifier of each case
+ADDR_PCT_CD: The precinct in which the incident occurred
+BORO_NM: borough names
+CMPLNT_FR_DT: Exact date of occurrence for the reported event
+LAW_CAT_CD: Level of offense: felony, misdemeanor, violation
+OFNS_DESC: Description of offense corresponding with key code
+Latitude
+Longitude
+with above columns, we will be able to summarize the total crime numbers each month by location and crime type:
+
+```{r extract key col}
+crime_subset = raw_crime %>%
+  select(CMPLNT_NUM, CMPLNT_FR_DT, BORO_NM, ADDR_PCT_CD, LAW_CAT_CD, OFNS_DESC, Latitude, Longitude) 
+
+crime_subset %>%
+  filter(is.na(ADDR_PCT_CD))
+```
+
+Based on the longitude and latitude data, we can identify the precint info and 
+will impute as below:
+270325369H1 50 bronx
+270324746H1 50 bronx
+268272009H1 106 queens
+271421229H1 67 brooklyn
+
+```{r impute missing}
+crime_subset <- crime_subset %>%
+  mutate(ADDR_PCT_CD = case_when(
+    CMPLNT_NUM == "270325369H1" ~ 50,
+    CMPLNT_NUM == "270324746H1" ~ 50,
+    CMPLNT_NUM == "268272009H1" ~ 106,
+    CMPLNT_NUM == "271421229H1" ~ 67,
+    TRUE ~ ADDR_PCT_CD
+  ))
+```
+
+```{r check imputed}
+#cross checking imputed data
+crime_subset %>%
+  filter(CMPLNT_NUM %in% c("270325369H1", "270324746H1", "268272009H1", "271421229H1"))
+```
+
+now, assign district by precinct:
+```{r re-assign precinct}
+crime_subset <- crime_subset %>%
+  mutate(BORO_NM = case_when(
+    ADDR_PCT_CD >= 1 & ADDR_PCT_CD <= 35 ~ "MANHATTAN",
+    ADDR_PCT_CD >= 40 & ADDR_PCT_CD <= 52 ~ "BRONX",
+    ADDR_PCT_CD >= 60 & ADDR_PCT_CD <= 94 ~ "BROOKLYN",
+    ADDR_PCT_CD >= 100 & ADDR_PCT_CD <= 115 ~ "QUEENS",
+    ADDR_PCT_CD >= 120 & ADDR_PCT_CD <= 125 ~ "STATEN ISLAND",
+    TRUE ~ BORO_NM
+  ))
+unique(crime_subset$BORO_NM)
+```
+
+based on skimming the data, all 4 missing in OFNS_DESC are OBSCENITY based on the col PL_DESC
+```{r impute OBSCENIT}
+crime_subset <- crime_subset %>%
+  mutate(OFNS_DESC = ifelse(OFNS_DESC == "(null)", "OBSCENIT", OFNS_DESC))
+unique(crime_subset$OFNS_DESC)
+```
+
+```{r format time}
+library(lubridate)
+crime_subset$CMPLNT_FR_DT = mdy(crime_subset$CMPLNT_FR_DT)
+```
+
+Based on the cleaned file, there is only one record without geographical latitude and longitude, we will impute this cell with mice
+```{r 1 longitude missing}
+skim(crime_subset)
+```
+
+### 1.2.2 Mice Impute
+since we are using crime dataset with spatial analysis, so we will need to impute this 1 missing value in longitude and latitude
+```{r mice impute}
+library(mice)
+library(randomForest)
+mice_crime = mice::complete(mice(crime_subset,seed = 617))
+```
+
+```{r write clean csv}
+write.csv(mice_crime, 'crime_cleaned_for_Javier.csv',row.names = F)
+```
+
+### 1.2.3 Summary
+
+```{r summary and arrange}
+#by borough - precinct- law- offense type- year- months
+crime_summary<- mice_crime %>%
+  mutate(year = year(CMPLNT_FR_DT), 
+         month = month(CMPLNT_FR_DT)) %>% 
+  group_by(BORO_NM, ADDR_PCT_CD	, LAW_CAT_CD, OFNS_DESC, year, month) %>%
+  summarise(complaints = n()) 
+
+crime_summary <- crime_summary %>%
+  arrange(ADDR_PCT_CD, year, month, LAW_CAT_CD, OFNS_DESC)
+```
+
+
+```{r write clean csv}
+write.csv(crime_summary, 'crime_summary.csv',row.names = F)
+write.csv(mice_crime, 'cleaned_crime.csv',row.names = F)
+```
+
+The crime summary can be manipulated into many other forms based on the attributes being examined, for example, crime numbers by borough over time
+```{r alternative summary}
+crime_borough_performance = crime_summary %>%
+  group_by(BORO_NM,  LAW_CAT_CD,  year, month) %>%
+  summarise(complaints = n()) 
+```
+
+## 1.3 the Rent Dataset
+### 1.3.1 Cleanning
+```{r Load and Clean}
+library(dplyr)
+library(tidyr)
+rental_data <- read.csv("medianAskingRent_All.csv")
+#Clean Data
+cleaned_rentaldata <- rental_data |>
+  pivot_longer(cols = 4:172, names_to = "Date", values_to = "median_rental_price") |> #Pivot Longer
+  separate_wider_delim(Date, delim = ".",names = c("Year", "Month")) #Split Date
+cleaned_rentaldata$Year <- gsub("X","",cleaned_rentaldata$Year) #Remove X value from Year
+```
+
+```{r Filter}
+#Filter Data
+cleaned_rentaldata <- cleaned_rentaldata |>
+  filter(Year %in% 
+           c("2010", "2011","2012","2013","2014","2015","2016","2017",
+             "2018","2019","2020","2021","2022","2023")) 
+nrow(cleaned_rentaldata)
+skim(cleaned_rentaldata)
+```
+
+```{r check na}
+city_borough = cleaned_rentaldata %>%
+  filter(areaName %in% 
+           c("NYC", "Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"))
+city_borough %>%
+  filter(is.na(median_rental_price))
+```
+
+```{r borogh summary}
+city_borough <- city_borough %>%
+  mutate(Borough = case_when(
+    areaName == "NYC" ~ "NYC",
+    TRUE ~ Borough
+  ))
+```
+
+```{r staten island na}
+Staten_rent = city_borough %>%
+  filter(areaName == "Staten Island")
+Staten_rent$Year <- as.integer(Staten_rent$Year)
+Staten_rent$Month <- as.integer(Staten_rent$Month)
+
+skim(Staten_rent)
+```
+
+
+### 1.3.2 Mice Impute
+```{r mice impute}
+library(mice)
+library(randomForest)
+library(ranger)
+
+mice_staten_rent = mice::complete(mice(Staten_rent,method = "rf", seed = 617, rfPackage='randomForest')) 
+```
+
+```{r rbind imputed data}
+city_borough$Year <- as.integer(city_borough$Year)
+city_borough$Month <- as.integer(city_borough$Month)
+
+city_borough = city_borough %>%
+  filter(!(areaName == "Staten Island"))
+city_borough <- rbind(city_borough, mice_staten_rent)
+skim(city_borough)
+```
+csv for time analysis is now cleaned
+```{r write clean csv}
+write.csv(city_borough, 'city_borough_rent.csv',row.names = F)
+```
+
+# H1 Time Series
+
+```{r package}
+library(ggplot2);library(ggthemes);library(gridExtra)  # For plots 
+library(quantmod);library(xts);library(zoo) # For using xts class objects
+library(forecast) # Set of forecasting functions
+library(fpp); library(fpp2) # Datasets from Forecasting text by Rob Hyndman
+library(tseries) # for a statistical test
+library(dplyr) # Data wrangling
+```
+
+## H1 NYC rental Forecast
+
+### Explanatory Plot
+```{r time_rental}
+time_retal = city_borough
+time_retal$Date = as.Date(paste(time_retal$Year, time_retal$Month, "01", sep="-"))
+time_retal$`median_rental_price` <- as.numeric(time_retal$`median_rental_price`)
+```
+
+Plot for NYC 
+```{r NYC rent plot}
+# NYC median rent over time
+time_retal %>%
+  filter(areaType == "city")%>%
+  ggplot(aes(x=Date, y=median_rental_price)) + 
+  geom_line() +
+  facet_grid(areaName~.) + 
+  labs(title = "Median Rent Over Time NYC", 
+       x = "Date", 
+       y = "Price") 
+```
+
+Plot for 5 boroughs
+```{r borough rent plot}
+# 5 borogh median rent over time
+time_retal %>%
+  filter(areaType == "borough")%>%
+  ggplot(aes(x=Date, y=median_rental_price)) + 
+  geom_line() +
+  facet_grid(areaName~.) + 
+  labs(title = "Median Rent Over Time by Borough", 
+       x = "Date", 
+       y = "Price") 
+```
+
+
+### TS NYC Preprocessing
+```{r select NYC and ts}
+NYCtime_retal = city_borough %>%
+  filter(areaType == "city") 
+
+NYCtime_retal$Date <- as.Date(paste(NYCtime_retal$Year, NYCtime_retal$Month, "01", sep="-"))
+
+# Convert the Median Rental Price to numeric
+NYCtime_retal$`median_rental_price` <- as.numeric(NYCtime_retal$`median_rental_price`)
+
+# Convert to a TS object
+NYC_ts <- ts(NYCtime_retal$`median_rental_price`, start=c(2010, 1), frequency=12)
+```
+
+```{r check ts}
+NYC_ts 
+```
+visualize NYC_ts
+```{r season plot}
+ggseasonplot(austourists) +
+  labs(title = "NYC Median Rent by year", 
+       x = "Date", 
+       y = "Price")
+```
+
+```{r season plot}
+ggseasonplot(NYC_ts, polar=T) + 
+  labs(title = "NYC Median Rent by year", 
+       x = "Date", 
+       y = "Price") # add marks hard to read ask gpt
+```
+
+```{r periodic polt}
+NYC_ts%>%
+  stl(s.window = 'periodic')%>%
+  autoplot()
+```
+
+```{r pacf plot}
+library(forecast)
+pacf(x = NYC_ts)
+```
+
+train and test
+```{r train and test} 
+train_NYC = window(NYC_ts,start=c(2010,01),end=c(2022,12)) #11 years on train
+test_NYC = window(NYC_ts,start=c(2023,01),end=c(2023,12)) #1 year on test
+```
+
+#### H1.1 Simple Forecasting Methods
+##### Seasonal Native Method
+```{r model}
+seasonal_naive_model = snaive(train_NYC,h=12)
+seasonal_naive_model$mean
+accuracy(seasonal_naive_model,x = NYC_ts)
+```
+
+#####  Drift Method
+```{r model result}
+drift_model = rwf(train_NYC,h=12,drift = T)
+drift_model$mean
+accuracy(drift_model,x = NYC_ts)
+```
+
+```{r plot}
+autoplot(train_NYC)+
+  autolayer(seasonal_naive_model,PI=F,size=1.1,series='Seasonal Naive Model')+
+  autolayer(drift_model,PI=F,size=1.1,series='Drift Model')+
+  autolayer(test_NYC, size= 1.1, color="black")+
+  labs(title = "Prediction Performance: Median Rent Over Time NYC", 
+       x = "Date", 
+       y = "Price") 
+```
+
+#### H1.2 Exponential Smoothing Models
+##### Simple Exponential Smoothing
+```{r mdoel and result}
+ses_model = ses(train_NYC,h = 12)
+ses_model$mean
+accuracy(ses_model,x = NYC_ts) 
+```
+
+##### Holt Method
+```{r model and accuracy}
+holt_model = holt(train_NYC,h=12)
+holt_model$mean
+accuracy(holt_model,x=NYC_ts)
+```
+
+##### Holt’s Method with Damping
+```{r model and accuracy}
+holt_damped_model = holt(train_NYC, h=12, damped = T)
+holt_damped_model$mean
+accuracy(holt_damped_model,x=NYC_ts)
+```
+
+##### Holt_Winter’s Additive
+```{r model and accuracy}
+hw_additive = hw(train_NYC,h=12,seasonal = 'additive', damped=T)
+hw_additive$mean
+accuracy(hw_additive,x = NYC_ts)
+```
+
+##### Holt_Winter’s Multiplicative
+```{r model and accuracy}
+hw_multiplicative = hw(train_NYC,h=12,seasonal = 'multiplicative', damped=T)
+hw_multiplicative$mean
+accuracy(hw_multiplicative,x=NYC_ts)
+```
+
+
+```{r result plot}
+autoplot(train_NYC)+
+  autolayer(seasonal_naive_model,PI=F,size=1.1,series='Seasonal Naive Model')+
+  autolayer(drift_model,PI=F,size=1.1,series='Drift Model')+
+  autolayer(ses_model,series = "Simple Exponential Smoothing",PI = F, size=1.1)+
+  autolayer(holt_model,series = 'Holt',PI=F,size=1.1)+
+  autolayer(holt_damped_model,series = 'Holt Damped',PI=F,size=1.1)+
+  autolayer(hw_additive,series = 'Holt Winter Additive',PI=F,size=1.1)+
+  autolayer(hw_multiplicative,series = 'Holt Winter Multiplicative',PI=F,size=1.1)+
+  autolayer(test_NYC, size= 1.1, color="black")+
+  labs(title = "Prediction Performance: Median Rent Over Time NYC", 
+       x = "Date", 
+       y = "Price") 
+```
+
+#### H1.3 ETS Models
+##### ETS AAA (not white noise)
+```{r model}
+ets_aaa = ets(train_NYC,model = 'AAA')
+summary(ets_aaa)
+```
+
+```{r residuals}
+checkresiduals(ets_aaa)
+```
+The residuals from the ETS(A,Ad,A) model are not white noise since there is evidence of autocorrelation at lag 24. In this case, because the residuals show significant autocorrelation, it is advisable to revisit the model specification.
+
+
+##### ETS Automatic Selection
+```{r model}
+ets_auto = ets(train_NYC)
+summary(ets_auto)
+```
+
+```{r forecast and accuracy}
+ets_auto_forecast = forecast(ets_auto,h=12)
+accuracy(ets_auto_forecast,x = NYC_ts)
+```
+
+```{r result plot}
+autoplot(train_NYC)+
+  autolayer(seasonal_naive_model,PI=F,size=1.1,series='Seasonal Naive Model')+
+  autolayer(drift_model,PI=F,size=1.1,series='Drift Model')+
+  autolayer(ses_model,series = "Simple Exponential Smoothing",PI = F, size=1.1)+
+  autolayer(holt_model,series = 'Holt',PI=F,size=1.1)+
+  autolayer(holt_damped_model,series = 'Holt Damped',PI=F,size=1.1)+
+  autolayer(hw_additive,series = 'Holt Winter Additive',PI=F,size=1.1)+
+  autolayer(hw_multiplicative,series = 'Holt Winter Multiplicative',PI=F,size=1.1)+
+  autolayer(ets_auto_forecast,series="ETS - MAM (auto)",PI=F, size=1.1)+
+  autolayer(test_NYC, size= 1.1, color="black")+
+  labs(title = "Prediction Performance: Median Rent Over Time NYC", 
+       x = "Date", 
+       y = "Price") 
+```
+
+#### H1.4 Arima
+##### Auto-arima models
+```{r auto-arima model}
+model_auto = auto.arima(y = train_NYC,d = 1,D = 1,stepwise = F,approximation = F)
+model_auto
+```
+
+```{r white noise}
+checkresiduals(model_auto)
+```
+
+
+```{r forecast and accuracy}
+#Forecast
+arima_auto_forecast <- forecast(model_auto, h=12)
+accuracy(arima_auto_forecast, x = NYC_ts)
+```
+
+### Model Summary
+```{r accuracy summary}
+rbind(seasonal_naive_model = accuracy(f = seasonal_naive_model,x = NYC_ts)[2,],
+      drift_model = accuracy(f = drift_model,x = NYC_ts)[2,],
+      ses_model = accuracy(f = ses_model,x = NYC_ts)[2,],
+      holt_model = accuracy(f = holt_model,x = NYC_ts)[2,],
+      holt_damped_model = accuracy(f = holt_damped_model,x = NYC_ts)[2,],
+      hw_additive_model = accuracy(f = hw_additive,x = NYC_ts)[2,],
+      hw_multiplicative = accuracy(f = hw_multiplicative,x = NYC_ts)[2,],
+      ets_auto = accuracy(ets_auto_forecast,x = NYC_ts)[2,],
+      arima = accuracy(arima_auto_forecast,x=NYC_ts)[2,]
+      )
+```
+
+
+```{r plot result with test}
+autoplot(train_NYC, color='black')+
+  autolayer(test_NYC,size=1.2,color='black')+
+  autolayer(seasonal_naive_model,series = 'Seasonal Naive Model',PI=F)+
+  autolayer(drift_model,series = 'Drift Model',PI=F)+
+  autolayer(ses_model,series = 'SES Model',PI=F)+
+  autolayer(holt_model,series = 'Holt',PI=F)+
+  autolayer(holt_damped_model,series = 'Holt Damped',PI=F)+
+  autolayer(hw_additive,series = 'Holt Winter Additive',PI=F)+
+  autolayer(hw_multiplicative,series = 'Holt Winter Multiplicative',PI=F)+
+  autolayer(ets_auto_forecast,series = 'ETS Auto',PI=F)+
+  autolayer(arima_auto_forecast,series = 'Arima Auto',PI=F)+
+  labs(title = "Prediction Performance: Median Rent Over Time NYC", 
+       x = "Date", 
+       y = "Price") 
+```
+### Predict 2024-2025
+```{r predict further}
+NYC_forecasted_2425 <- hw(train_NYC,h=36,seasonal = 'multiplicative', damped=T)
+NYC_forecasted_2425$mean
+```
+
+
+```{r forecast plot}
+autoplot(NYC_forecasted_2425)
+```
+
+```{r check accuracy}
+accuracy(NYC_forecasted_2425)
+```
+
+* NOTE
+5 BOROUGH PREDICTIONS NOT DONE YET, WILL ADD IF THERE IS EXTRA TIME
+
+
+
+
+
+# H2 Noise Data Clustering
+## Format Data
+
+```{r format time}
+H2_data<- cleaned_noise_final%>%
+  mutate(year = year(Created.Date), 
+         month = month(Created.Date))
+H2_data = H2_data %>%
+  filter(year %in% c(2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022))
+```
+
+```{r filter}
+H2_data = H2_data %>%
+  group_by(Complaint.Type, Community.Board, Borough) %>%
+  summarise(complaints = n()) 
+```
+Pivot Wider for future clustering
+```{r pivot wider}
+H2_data <- H2_data %>%
+  spread(key = Complaint.Type, value = complaints, fill = 0)
+```
+
+```{r write clean csv}
+write.csv(H2_data, 'H2_data.csv',row.names = F)
+```
+
+## Read for Clustering
+```{r read data}
+data = read.csv(file = 'H2_data.csv',stringsAsFactors = F)
+data_cluster = data[,3:11]
+head(data_cluster[,1:9])
+```
+
+## Scale
+```{r scale}
+data_cluster = scale(data_cluster)
+head(data_cluster[,1:9])
+```
+
+### H2.1 H-cluster
+```{r h-cluster}
+d = dist(x = data_cluster,method = 'euclidean') 
+clusters = hclust(d = d,method='ward.D2')
+plot(clusters)
+```
+
+```{r godness of fit}
+cor(cophenetic(clusters),d)
+```
+ CPC> 0.7 indicates relatively strong fit, 0.3<CPC<0.7 indicates moderate fit.
+
+!!!!!!NOTE: after i re cleaned the data on Apr 10th, the cor dropped from 0.6 to 0.57!!!!!!!
+
+#### 2/3/4 h-clusters
+```{r}
+library(factoextra)
+library(gridExtra)
+
+grid.arrange(fviz_dend(x = clusters,k=2),
+             fviz_dend(x = clusters,k=3),
+             fviz_dend(x = clusters,k=4)
+)
+```
+ 
+#### selecting Clusters ==4
+```{r}
+h_segments = cutree(tree = clusters,k=4)
+table(h_segments)
+```
+
+#### plot
+```{r}
+library(cluster)
+clusplot(data_cluster,
+         h_segments,
+         color=T,shade=T,labels=4,lines=0,main='Hierarchical Cluster Plot')
+```
+
+### H2.2 Kmeans Clustering
+#### Determing Clusters
+```{r}
+within_ss = sapply(1:10,FUN = function(x){
+  set.seed(617)
+  kmeans(x = data_cluster,centers = x,iter.max = 1000,nstart = 25)$tot.withinss})
+  
+ggplot(data=data.frame(cluster = 1:10,within_ss),aes(x=cluster,y=within_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1))
+```
+
+```{r}
+ratio_ss = sapply(1:10,FUN = function(x) {
+  set.seed(617)
+  km = kmeans(x = data_cluster,centers = x,iter.max = 1000,nstart = 25)
+  km$betweenss/km$totss} )
+ggplot(data=data.frame(cluster = 1:10,ratio_ss),aes(x=cluster,y=ratio_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1))
+```
+```{r}
+library(cluster)
+silhoette_width = sapply(2:10,
+                         FUN = function(x) pam(x = data_cluster,k = x)$silinfo$avg.width)
+ggplot(data=data.frame(cluster = 2:10,silhoette_width),aes(x=cluster,y=silhoette_width))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(2,10,1))
+```
+
+#### Kmeans clustering ==3 
+```{r}
+set.seed(617)
+km3 = kmeans(x = data_cluster,centers = 3,iter.max=10000,nstart=25)
+k_segments3 = km3$cluster
+table(k_segments3)
+```
+
+
+#### visualize
+```{r}
+library(psych)
+temp3 = data.frame(cluster = factor(k_segments3),
+           factor1 = fa(data_cluster,nfactors = 2,rotate = 'varimax')$scores[,1],
+           factor2 = fa(data_cluster,nfactors = 2,rotate = 'varimax')$scores[,2])
+ggplot(temp3,aes(x=factor1,y=factor2,col=cluster))+
+  geom_point()
+```
+```{r}
+library(cluster)
+clusplot(data_cluster,
+         k_segments3,
+         color=T,shade=T,labels=3,lines=0,main='k-means Cluster Plot')
+```
+#### Kmeans clustering ==4
+```{r}
+set.seed(617)
+km4 = kmeans(x = data_cluster,centers = 4,iter.max=10000,nstart=25)
+k_segments4 = km4$cluster
+table(k_segments4)
+```
+
+#### visualize
+```{r}
+library(psych)
+temp4 = data.frame(cluster = factor(k_segments4),
+           factor1 = fa(data_cluster,nfactors = 2,rotate = 'varimax')$scores[,1],
+           factor2 = fa(data_cluster,nfactors = 2,rotate = 'varimax')$scores[,2])
+ggplot(temp4,aes(x=factor1,y=factor2,col=cluster))+
+  geom_point()
+```
+
+```{r}
+library(cluster)
+clusplot(data_cluster,
+         k_segments4,
+         color=T,shade=T,labels=4,lines=0,main='k-means Cluster Plot')
+```
+
+
+
+### Contrast Result
+```{r}
+
+```
+
