@@ -1,4 +1,4 @@
-# NYC_Urban_Livability
+# NYC_Urban_Liveability
 A multi-factor analysis on rent, noise &amp; crime across New York City using Machine Learning techniques including Time Series Analysis, Cluster Analysis and Spatial Analysis.
 
 # 1) How are rent prices expected to change in the next two years across New York City?
