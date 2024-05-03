@@ -13,7 +13,7 @@ To obtain predictions with the highest accuracy, we compare the performance of s
 ## Findings
 The forecast shows that the median rental price in January 2023 starts at $3,410, and by December 2025, it rises to $3,682.
 
-# 1) How do the noise complaint types vary across neighborhoods in New York City?
+# 2) How do the noise complaint types vary across neighborhoods in New York City?
 This study utilizes NYC Open Data’s dataset containing roughly 6.5 million complaints. 
 
 ## Methodology
@@ -22,11 +22,11 @@ Cluster analysis is used to group neighborhoods on the basis of the various type
 ## Findings
 Three kinds of neighborhoods were identified. Cluster 1 has the highest levels of noise complaints, indicating high population density and commercial zones with significant street activity. Cluster 2 has neighborhoods with a small mix of residential and commercial areas. Cluster 3 has  relatively moderate levels from streets and sidewalks indicating that they are not very densely populated. However commercial, helicopter and random noises are significantly higher here than in the other two clusters.
 
-# 1) How do the crimes vary across neighborhoods in New York City?
+# 3) How do the crimes vary across neighborhoods in New York City?
 Using the NYC open data and the Google Maps API, we evaluate the crime levels and types across the city.
 
 ## Methodology
-get_map() to fetch maps from Google Maps to serve as a base layer for the spatial visualization. It sets the location, zoom level, and scale for the map of New York City. ggmap() then initializes the plotting of the map object obtained from get_map(). Finally, we used functions such as theme(), and guides() to modify the appearance of the plot.
+The get_map function is used to create the base layer for the spatial visualization. It sets the location, zoom level, and scale for the map of New York City. ggmap() then initializes the plotting of the map object obtained from get_map(). Finally, we used functions such as theme(), and guides() to modify the appearance of the plot.
 
 ## Findings
 Crime is more concentrated in Manhattan, Southern Bronx & Central Brooklyn. Felonies were the most common category of crime
